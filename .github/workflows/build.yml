@@ -1,0 +1,70 @@
+name: Compilar ffprobe
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Herramientas (mingw-w64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 make xz-utils
+      - name: Compilar
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffprobe
+          path: out/
+
+  test:
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffprobe
+          path: out
+      - name: Arranca sin DLL externas y es LGPL
+        shell: pwsh
+        run: |
+          ./out/ffprobe.exe -hide_banner -version
+          if ($LASTEXITCODE -ne 0) { throw 'ffprobe.exe no arranca' }
+          ./out/ffprobe.exe -hide_banner -demuxers
+          $conf = ./out/ffprobe.exe -hide_banner -buildconf | Out-String
+          if ($conf -match 'enable-gpl') { throw 'Compilado con --enable-gpl' }
+          $license = ./out/ffprobe.exe -hide_banner -L | Out-String
+          if ($license -notmatch 'Lesser General Public License') { throw 'La licencia no es LGPL' }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffprobe
+          path: out
+      - name: Publicar la versión con el binario y su código fuente
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: out/BUILD-INFO.txt
+          files: |
+            out/ffprobe.exe
+            out/BUILD-INFO.txt
+            out/ffmpeg-*.tar.xz
+            out/ffmpeg-*.tar.xz.asc
+            build.sh
+            LICENSE
